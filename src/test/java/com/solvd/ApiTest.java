@@ -3,6 +3,7 @@ package com.solvd;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.solvd.model.User;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -12,6 +13,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 
 import static org.testng.Assert.assertEquals;
@@ -22,6 +25,7 @@ TODO
  - 100% independent (all resources used in the test should be created as part of the same test)
  - Request body data (or data for response’s body validation) should be stored as a template, do not copy entire requests bodies just adding small changes.
  - cleanup & add utility methods
+ - logging
  */
 
 public class ApiTest {
@@ -29,7 +33,54 @@ public class ApiTest {
     private final String token = "Bearer 9a254e49a66b1afca3271be77ac108c7cd981a2782182ffd221186df0c1d67c7";
     private final URI uri = URI.create(endpoint);
 
-    private List<Long> createdIds = new ArrayList<>();
+    private ThreadLocal<List<Long>> createdIds;
+
+    public void setup() {
+        createdIds = new ThreadLocal<>();
+        createdIds.set(new ArrayList<>());
+
+        var users = List.of(
+                new User("adam111", "addfam444444444444@brakus.test", "male", "active"),
+                new User("adam222", "addafm55555555@brakus.test", "male", "active"),
+                new User("adam333", "addfdam666666666@brakus.test", "male", "active")
+        );
+
+        for (var user : users)
+            try (HttpClient httpClient = HttpClient.newHttpClient()) {
+                HttpRequest httpRequest = HttpRequest.newBuilder(uri)
+                        .POST(HttpRequest.BodyPublishers.ofString(new ObjectMapper().writeValueAsString(user)))
+                        .header("Authorization", token)
+                        .header("Content-Type", "application/json; charset=utf-8")
+                        .build();
+
+                var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+
+                if (response.statusCode() == 200) {
+                    User createdUser = new ObjectMapper().readValue(response.body(), User.class);
+                    createdIds.get().add(createdUser.getId());
+                }
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+    }
+
+    @AfterMethod(onlyForGroups = "usingSampleData")
+    public void dispose() {
+        for (var id : createdIds.get())
+            try (HttpClient httpClient = HttpClient.newHttpClient()) {
+                HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(endpoint + "/" + id)).DELETE()
+                        .header("Authorization", token)
+                        .build();
+
+                var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+    }
 
     @Test
     public void testGetUsers() {
@@ -53,22 +104,22 @@ public class ApiTest {
     }
 
     @DataProvider(name = "userIds")
-    public Object[] userIdsDataProvider() {
-        return new Object[]{
-                7395700,
-                7395699,
-                7395698
-        };
+    public Iterator<Object> userIdsDataProvider() {
+        setup();
+        return Arrays.stream(createdIds.get().toArray()).iterator();
     }
 
-    @Test(dataProvider = "userIds")
+    @Test(dataProvider = "userIds", groups = "usingSampleData")
     public void testGetUser(long id) {
         try (HttpClient httpClient = HttpClient.newHttpClient()) {
-            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(endpoint + "/" + id)).GET().build();
+            HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(endpoint + "/" + id))
+                    .GET()
+                    .header("Authorization", token)
+                    .build();
 
             var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 
-            assertEquals(response.statusCode(), 200);
+            assertEquals(response.statusCode(), 200, response.body());
             assertEquals(response.headers().firstValue("Content-Type").orElse(""), "application/json; charset=utf-8");
 
             // verify body has correctly formated data
@@ -137,7 +188,7 @@ public class ApiTest {
             var getUserResponse = httpClient.send(getUserRequest, HttpResponse.BodyHandlers.ofString());
             assertTrue(createdUser.dataEquals(new ObjectMapper().readValue(getUserResponse.body(), User.class)));
 
-            createdIds.add(createdUser.getId());
+            //createdIds.add(createdUser.getId());
         } catch (IOException e) {
             throw new RuntimeException(e);
         } catch (InterruptedException e) {
@@ -171,25 +222,25 @@ public class ApiTest {
     public Object[] notValidUsersDataProvider() {
         return new Object[][]{
                 // email taken
-                {new User("a", "gita_johar@grady.test", "male", "active"),
+                {new User("a", "gita_johar123@grady.test", "male", "active"),
                         "[{\"field\":\"email\",\"message\":\"has already been taken\"}]"},
                 // no name
-                {new User("", "adam55@brakus.test", "male", "active"),
+                {new User("", "adam5555@brakus.test", "male", "active"),
                         "[{\"field\":\"name\",\"message\":\"can't be blank\"}]"},
                 // no email
                 {new User("adam", "", "male", "active"),
                         "[{\"field\":\"email\",\"message\":\"can't be blank\"}]"},
                 // no gender
-                {new User("adam333", "adam66@brakus.test", "", "active"),
+                {new User("adam333", "adam6666@brakus.test", "", "active"),
                         "[{\"field\":\"gender\",\"message\":\"can't be blank, can be male of female\"}]"},
                 // no status
-                {new User("adam333", "adam66@brakus.test", "male", ""),
+                {new User("adam333", "adam6666@brakus.test", "male", ""),
                         "[{\"field\":\"status\",\"message\":\"can't be blank\"}]"},
                 // invalid status
-                {new User("adam333", "adam66@brakus.test", "male", "off"),
+                {new User("adam333", "adam6666@brakus.test", "male", "off"),
                         "[{\"field\":\"status\",\"message\":\"can't be blank\"}]"},
                 // invalid gender
-                {new User("adam333", "adam66@brakus.test", "m", "active"),
+                {new User("adam333", "adam6666@brakus.test", "m", "active"),
                         "[{\"field\":\"gender\",\"message\":\"can't be blank, can be male of female\"}]"},
                 // empty
                 {new User(),
@@ -221,12 +272,7 @@ public class ApiTest {
         }
     }
 
-    @DataProvider(name = "createdUserIds")
-    public Object[] createdUserIdsDataProvider() {
-        return createdIds.toArray();
-    }
-
-    @Test(dataProvider = "createdUserIds", dependsOnMethods = "testPostUser")
+    @Test(dataProvider = "userIds", groups = "usingSampleData")
     public void testPatchUser(long id) {
         try (HttpClient httpClient = HttpClient.newHttpClient()) {
             HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(endpoint + "/" + id))
@@ -280,7 +326,7 @@ public class ApiTest {
         }
     }
 
-    @Test(dataProvider = "createdUserIds", dependsOnMethods = "testPatchUser")
+    @Test(dataProvider = "userIds", groups = "usingSampleData")
     public void testDeleteUser(long id) {
         try (HttpClient httpClient = HttpClient.newHttpClient()) {
             HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(endpoint + "/" + id)).DELETE()
